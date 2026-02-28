@@ -221,7 +221,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         add_to_history(user_id, "user", caption or "[이미지 전송]")
         add_to_history(user_id, "assistant", reply)
-        await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+        try:
+            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await update.message.reply_text(reply)
     except Exception as e:
         logger.error(f"이미지 처리 오류: {e}")
         await update.message.reply_text(f"이미지 처리 중 오류가 발생했습니다: {e}")
@@ -278,7 +281,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         add_to_history(user_id, "user", caption or f"[파일 전송: {filename}]")
         add_to_history(user_id, "assistant", reply)
-        await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+        try:
+            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await update.message.reply_text(reply)
 
     except Exception as e:
         logger.error(f"문서 처리 오류: {e}")
