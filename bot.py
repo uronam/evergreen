@@ -263,6 +263,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 image_data,
                 mime_type,
             )
+        elif mime_type == "application/pdf" or filename.lower().endswith(".pdf"):
+            async with aiofiles.open(tmp_path, "rb") as f:
+                pdf_data = await f.read()
+            reply = await asyncio.to_thread(
+                claude_client.ask_claude_with_pdf,
+                history,
+                caption,
+                pdf_data,
+            )
         else:
             # 텍스트 기반 파일 읽기 시도
             file_text = await _read_file_text(tmp_path, mime_type)
@@ -275,7 +284,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     filename,
                 )
             else:
-                reply = f"'{filename}' 파일 형식은 현재 텍스트 추출을 지원하지 않습니다.\n지원 형식: TXT, 마크다운, 코드 파일, CSV 등 텍스트 기반 파일"
+                reply = f"'{filename}' 파일 형식은 현재 텍스트 추출을 지원하지 않습니다.\n지원 형식: PDF, TXT, 마크다운, 코드 파일, CSV 등"
 
         os.unlink(tmp_path)
 

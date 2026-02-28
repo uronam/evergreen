@@ -48,6 +48,30 @@ def ask_claude_with_document(history: list[dict], user_message: str, file_text: 
     return ask_claude(history, doc_prompt)
 
 
+def ask_claude_with_pdf(history: list[dict], user_message: str, pdf_data: bytes) -> str:
+    """PDF를 직접 Claude에게 전송합니다 (Claude API 네이티브 PDF 지원)."""
+    pdf_b64 = base64.standard_b64encode(pdf_data).decode("utf-8")
+    content = [
+        {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": pdf_b64,
+            },
+        },
+        {"type": "text", "text": user_message or "이 PDF 문서를 요약하고 핵심 내용을 정리해 주세요."},
+    ]
+    messages = history + [{"role": "user", "content": content}]
+    response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=MAX_TOKENS,
+        system=SYSTEM_PROMPT,
+        messages=messages,
+    )
+    return response.content[0].text
+
+
 def stream_claude(history: list[dict], user_message: str):
     """Claude 응답을 스트리밍으로 생성합니다."""
     messages = history + [{"role": "user", "content": user_message}]
