@@ -92,13 +92,15 @@ async def send_long_message(update: Update, text: str, parse_mode=None) -> None:
         remaining = remaining[split_at:]
 
     for chunk in chunks:
+        sent = False
         if parse_mode:
             try:
                 await update.message.reply_text(chunk, parse_mode=parse_mode)
-                continue
+                sent = True
             except Exception:
                 pass
-        await update.message.reply_text(chunk)
+        if not sent:
+            await update.message.reply_text(chunk)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
