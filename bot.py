@@ -263,6 +263,21 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 image_data,
                 mime_type,
             )
+        elif filename.lower().endswith((".docx", ".doc")) or mime_type in (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/msword",
+        ):
+            file_text = await asyncio.to_thread(_read_docx, tmp_path)
+            if file_text:
+                reply = await asyncio.to_thread(
+                    claude_client.ask_claude_with_document,
+                    history,
+                    caption,
+                    file_text,
+                    filename,
+                )
+            else:
+                reply = "워드 파일에서 텍스트를 읽을 수 없습니다."
         elif mime_type == "application/pdf" or filename.lower().endswith(".pdf"):
             async with aiofiles.open(tmp_path, "rb") as f:
                 pdf_data = await f.read()
@@ -298,6 +313,19 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as e:
         logger.error(f"문서 처리 오류: {e}")
         await update.message.reply_text(f"파일 처리 중 오류가 발생했습니다: {e}")
+
+
+def _read_docx(path: str) -> str | None:
+    """워드 파일에서 텍스트를 추출합니다."""
+    try:
+        from docx import Document
+        doc = Document(path)
+        text = "\n".join(para.text for para in doc.paragraphs if para.text.strip())
+        if len(text) > 50000:
+            text = text[:50000] + "\n\n[... 파일이 너무 길어 앞부분만 처리합니다 ...]"
+        return text or None
+    except Exception:
+        return None
 
 
 async def _read_file_text(path: str, mime_type: str) -> str | None:
