@@ -12,6 +12,8 @@ import aiohttp
 import aiofiles
 import tempfile
 import os
+import queue
+import threading
 
 from telegram import Update, BotCommand
 from telegram.ext import (
@@ -134,13 +136,58 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_text = update.message.text
     history = get_history(user_id)
 
-    await send_typing(update, context)
-
     try:
-        reply = await asyncio.to_thread(claude_client.ask_claude, history, user_text)
+        sent_message = await update.message.reply_text("⏳")
+
+        q: queue.Queue = queue.Queue()
+
+        def produce():
+            try:
+                for chunk in claude_client.stream_claude(history, user_text):
+                    q.put(("chunk", chunk))
+            except Exception as e:
+                q.put(("error", str(e)))
+            finally:
+                q.put(("done", None))
+
+        threading.Thread(target=produce, daemon=True).start()
+
+        accumulated = ""
+        last_edit_time = asyncio.get_event_loop().time()
+        EDIT_INTERVAL = 1.5  # 텔레그램 rate limit 방지용 간격 (초)
+
+        while True:
+            try:
+                event_type, data = q.get_nowait()
+            except queue.Empty:
+                now = asyncio.get_event_loop().time()
+                if accumulated and now - last_edit_time >= EDIT_INTERVAL:
+                    try:
+                        await sent_message.edit_text(accumulated + " ▌")
+                        last_edit_time = now
+                    except Exception:
+                        pass
+                await asyncio.sleep(0.05)
+                continue
+
+            if event_type == "chunk":
+                accumulated += data
+            elif event_type == "error":
+                logger.error(f"스트리밍 오류: {data}")
+                await sent_message.edit_text(f"오류가 발생했습니다: {data}")
+                return
+            elif event_type == "done":
+                break
+
+        # 완료 후 마크다운 적용해서 최종 메시지 표시
+        try:
+            await sent_message.edit_text(accumulated, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await sent_message.edit_text(accumulated)
+
         add_to_history(user_id, "user", user_text)
-        add_to_history(user_id, "assistant", reply)
-        await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+        add_to_history(user_id, "assistant", accumulated)
+
     except Exception as e:
         logger.error(f"텍스트 처리 오류: {e}")
         await update.message.reply_text(f"오류가 발생했습니다: {e}")

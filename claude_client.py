@@ -46,3 +46,16 @@ def ask_claude_with_document(history: list[dict], user_message: str, file_text: 
     """문서 내용과 함께 Claude에게 질문합니다."""
     doc_prompt = f"[첨부 파일: {filename}]\n\n{file_text}\n\n---\n\n{user_message or '위 문서를 요약하고 핵심 내용을 정리해 주세요.'}"
     return ask_claude(history, doc_prompt)
+
+
+def stream_claude(history: list[dict], user_message: str):
+    """Claude 응답을 스트리밍으로 생성합니다."""
+    messages = history + [{"role": "user", "content": user_message}]
+    with client.messages.stream(
+        model=CLAUDE_MODEL,
+        max_tokens=MAX_TOKENS,
+        system=SYSTEM_PROMPT,
+        messages=messages,
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
