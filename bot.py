@@ -67,10 +67,38 @@ def clear_history(user_id: int) -> None:
     conversation_history[user_id] = []
 
 
+MAX_MSG_LEN = 4096
+
+
 async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action=ChatAction.TYPING
     )
+
+
+async def send_long_message(update: Update, text: str, parse_mode=None) -> None:
+    """긴 메시지를 4096자 단위로 분할해서 전송합니다."""
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= MAX_MSG_LEN:
+            chunks.append(remaining)
+            break
+        # 줄바꿈 위치에서 자연스럽게 분할
+        split_at = remaining.rfind("\n", 0, MAX_MSG_LEN)
+        if split_at == -1 or split_at < MAX_MSG_LEN // 2:
+            split_at = MAX_MSG_LEN
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+
+    for chunk in chunks:
+        if parse_mode:
+            try:
+                await update.message.reply_text(chunk, parse_mode=parse_mode)
+                continue
+            except Exception:
+                pass
+        await update.message.reply_text(chunk)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -180,10 +208,35 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 break
 
         # 완료 후 마크다운 적용해서 최종 메시지 표시
-        try:
-            await sent_message.edit_text(accumulated, parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            await sent_message.edit_text(accumulated)
+        if len(accumulated) <= MAX_MSG_LEN:
+            try:
+                await sent_message.edit_text(accumulated, parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                await sent_message.edit_text(accumulated)
+        else:
+            # 첫 번째 청크는 기존 메시지를 편집, 나머지는 새 메시지로 전송
+            chunks = []
+            remaining = accumulated
+            while remaining:
+                if len(remaining) <= MAX_MSG_LEN:
+                    chunks.append(remaining)
+                    break
+                split_at = remaining.rfind("\n", 0, MAX_MSG_LEN)
+                if split_at == -1 or split_at < MAX_MSG_LEN // 2:
+                    split_at = MAX_MSG_LEN
+                chunks.append(remaining[:split_at])
+                remaining = remaining[split_at:]
+
+            try:
+                await sent_message.edit_text(chunks[0], parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                await sent_message.edit_text(chunks[0])
+
+            for chunk in chunks[1:]:
+                try:
+                    await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    await update.message.reply_text(chunk)
 
         add_to_history(user_id, "user", user_text)
         add_to_history(user_id, "assistant", accumulated)
@@ -221,10 +274,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         add_to_history(user_id, "user", caption or "[이미지 전송]")
         add_to_history(user_id, "assistant", reply)
-        try:
-            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            await update.message.reply_text(reply)
+        await send_long_message(update, reply, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"이미지 처리 오류: {e}")
         await update.message.reply_text(f"이미지 처리 중 오류가 발생했습니다: {e}")
@@ -305,10 +355,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         add_to_history(user_id, "user", caption or f"[파일 전송: {filename}]")
         add_to_history(user_id, "assistant", reply)
-        try:
-            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            await update.message.reply_text(reply)
+        await send_long_message(update, reply, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"문서 처리 오류: {e}")
