@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 텔레그램 Claude 봇
 - 텍스트 메세지 → Claude 응답
