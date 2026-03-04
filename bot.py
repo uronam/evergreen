@@ -70,6 +70,22 @@ def clear_history(user_id: int) -> None:
 MAX_MSG_LEN = 4096
 
 
+def _split_text(text: str, max_len: int = MAX_MSG_LEN) -> list[str]:
+    """텍스트를 max_len 단위로 분할합니다 (줄바꿈 경계 우선)."""
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+        split_at = remaining.rfind("\n", 0, max_len)
+        if split_at == -1 or split_at < max_len // 2:
+            split_at = max_len
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+    return chunks
+
+
 async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action=ChatAction.TYPING
@@ -78,20 +94,7 @@ async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def send_long_message(update: Update, text: str, parse_mode=None) -> None:
     """긴 메시지를 4096자 단위로 분할해서 전송합니다."""
-    chunks = []
-    remaining = text
-    while remaining:
-        if len(remaining) <= MAX_MSG_LEN:
-            chunks.append(remaining)
-            break
-        # 줄바꿈 위치에서 자연스럽게 분할
-        split_at = remaining.rfind("\n", 0, MAX_MSG_LEN)
-        if split_at == -1 or split_at < MAX_MSG_LEN // 2:
-            split_at = MAX_MSG_LEN
-        chunks.append(remaining[:split_at])
-        remaining = remaining[split_at:]
-
-    for chunk in chunks:
+    for chunk in _split_text(text):
         sent = False
         if parse_mode:
             try:
@@ -183,14 +186,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         threading.Thread(target=produce, daemon=True).start()
 
         accumulated = ""
-        last_edit_time = asyncio.get_event_loop().time()
+        last_edit_time = asyncio.get_running_loop().time()
         EDIT_INTERVAL = 1.5  # 텔레그램 rate limit 방지용 간격 (초)
 
         while True:
             try:
                 event_type, data = q.get_nowait()
             except queue.Empty:
-                now = asyncio.get_event_loop().time()
+                now = asyncio.get_running_loop().time()
                 if accumulated and now - last_edit_time >= EDIT_INTERVAL:
                     try:
                         await sent_message.edit_text(accumulated + " ▌")
@@ -210,35 +213,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 break
 
         # 완료 후 마크다운 적용해서 최종 메시지 표시
-        if len(accumulated) <= MAX_MSG_LEN:
-            try:
-                await sent_message.edit_text(accumulated, parse_mode=ParseMode.MARKDOWN)
-            except Exception:
-                await sent_message.edit_text(accumulated)
-        else:
-            # 첫 번째 청크는 기존 메시지를 편집, 나머지는 새 메시지로 전송
-            chunks = []
-            remaining = accumulated
-            while remaining:
-                if len(remaining) <= MAX_MSG_LEN:
-                    chunks.append(remaining)
-                    break
-                split_at = remaining.rfind("\n", 0, MAX_MSG_LEN)
-                if split_at == -1 or split_at < MAX_MSG_LEN // 2:
-                    split_at = MAX_MSG_LEN
-                chunks.append(remaining[:split_at])
-                remaining = remaining[split_at:]
+        chunks = _split_text(accumulated)
+        try:
+            await sent_message.edit_text(chunks[0], parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await sent_message.edit_text(chunks[0])
 
+        for chunk in chunks[1:]:
             try:
-                await sent_message.edit_text(chunks[0], parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
             except Exception:
-                await sent_message.edit_text(chunks[0])
-
-            for chunk in chunks[1:]:
-                try:
-                    await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
-                except Exception:
-                    await update.message.reply_text(chunk)
+                await update.message.reply_text(chunk)
 
         add_to_history(user_id, "user", user_text)
         add_to_history(user_id, "assistant", accumulated)
@@ -302,58 +287,59 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
             tmp_path = tmp.name
 
-        await file.download_to_drive(tmp_path)
+        try:
+            await file.download_to_drive(tmp_path)
 
-        # 파일 타입에 따라 처리
-        if mime_type.startswith("image/"):
-            async with aiofiles.open(tmp_path, "rb") as f:
-                image_data = await f.read()
-            reply = await asyncio.to_thread(
-                claude_client.ask_claude_with_image,
-                history,
-                caption,
-                image_data,
-                mime_type,
-            )
-        elif filename.lower().endswith((".docx", ".doc")) or mime_type in (
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/msword",
-        ):
-            file_text = await asyncio.to_thread(_read_docx, tmp_path)
-            if file_text:
+            # 파일 타입에 따라 처리
+            if mime_type.startswith("image/"):
+                async with aiofiles.open(tmp_path, "rb") as f:
+                    image_data = await f.read()
                 reply = await asyncio.to_thread(
-                    claude_client.ask_claude_with_document,
+                    claude_client.ask_claude_with_image,
                     history,
                     caption,
-                    file_text,
-                    filename,
+                    image_data,
+                    mime_type,
                 )
-            else:
-                reply = "워드 파일에서 텍스트를 읽을 수 없습니다."
-        elif mime_type == "application/pdf" or filename.lower().endswith(".pdf"):
-            async with aiofiles.open(tmp_path, "rb") as f:
-                pdf_data = await f.read()
-            reply = await asyncio.to_thread(
-                claude_client.ask_claude_with_pdf,
-                history,
-                caption,
-                pdf_data,
-            )
-        else:
-            # 텍스트 기반 파일 읽기 시도
-            file_text = await _read_file_text(tmp_path, mime_type)
-            if file_text:
+            elif filename.lower().endswith((".docx", ".doc")) or mime_type in (
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/msword",
+            ):
+                file_text = await asyncio.to_thread(_read_docx, tmp_path)
+                if file_text:
+                    reply = await asyncio.to_thread(
+                        claude_client.ask_claude_with_document,
+                        history,
+                        caption,
+                        file_text,
+                        filename,
+                    )
+                else:
+                    reply = "워드 파일에서 텍스트를 읽을 수 없습니다."
+            elif mime_type == "application/pdf" or filename.lower().endswith(".pdf"):
+                async with aiofiles.open(tmp_path, "rb") as f:
+                    pdf_data = await f.read()
                 reply = await asyncio.to_thread(
-                    claude_client.ask_claude_with_document,
+                    claude_client.ask_claude_with_pdf,
                     history,
                     caption,
-                    file_text,
-                    filename,
+                    pdf_data,
                 )
             else:
-                reply = f"'{filename}' 파일 형식은 현재 텍스트 추출을 지원하지 않습니다.\n지원 형식: PDF, TXT, 마크다운, 코드 파일, CSV 등"
-
-        os.unlink(tmp_path)
+                # 텍스트 기반 파일 읽기 시도
+                file_text = await _read_file_text(tmp_path, mime_type)
+                if file_text:
+                    reply = await asyncio.to_thread(
+                        claude_client.ask_claude_with_document,
+                        history,
+                        caption,
+                        file_text,
+                        filename,
+                    )
+                else:
+                    reply = f"'{filename}' 파일 형식은 현재 텍스트 추출을 지원하지 않습니다.\n지원 형식: PDF, TXT, 마크다운, 코드 파일, CSV 등"
+        finally:
+            os.unlink(tmp_path)
 
         add_to_history(user_id, "user", caption or f"[파일 전송: {filename}]")
         add_to_history(user_id, "assistant", reply)
