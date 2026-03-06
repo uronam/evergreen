@@ -16,6 +16,47 @@ import pytz
 
 import claude_client
 
+# 종목코드 캐시 (기업명 → 코드)
+_ticker_cache: dict[str, str] = {}
+
+
+def get_stock_price(company: str) -> str | None:
+    """pykrx로 오늘 주가(현재가·등락률)를 조회합니다."""
+    try:
+        from pykrx import stock as krx
+        from datetime import datetime
+
+        today_str = datetime.now(KST).strftime("%Y%m%d")
+
+        # 종목코드 조회 (캐시 활용)
+        if company not in _ticker_cache:
+            for market in ("ALL",):
+                tickers = krx.get_market_ticker_list(today_str, market=market)
+                for t in tickers:
+                    name = krx.get_market_ticker_name(t)
+                    if name == company:
+                        _ticker_cache[company] = t
+                        break
+                if company in _ticker_cache:
+                    break
+
+        ticker = _ticker_cache.get(company)
+        if not ticker:
+            return None
+
+        df = krx.get_market_ohlcv(today_str, today_str, ticker)
+        if df.empty:
+            return None
+
+        row = df.iloc[-1]
+        close = int(row.get("종가", row.iloc[3]))
+        change_pct = float(row.get("등락률", 0))
+        sign = "+" if change_pct >= 0 else ""
+        return f"{close:,}원 ({sign}{change_pct:.2f}%)"
+    except Exception as e:
+        logger.warning(f"주가 조회 실패 ({company}): {e}")
+        return None
+
 logger = logging.getLogger(__name__)
 
 KST = pytz.timezone("Asia/Seoul")
@@ -83,15 +124,22 @@ def search_news_for_one_company(company: str, today: str) -> str:
 
 
 def search_news_for_companies(companies: list[str]) -> str:
-    """기업 목록에 대한 최근 24시간 뉴스를 검색하고 요약합니다."""
+    """기업 목록에 대한 최근 24시간 뉴스 + 실시간 주가를 반환합니다."""
     from datetime import datetime
     today = datetime.now(KST).strftime("%Y년 %m월 %d일")
 
     results = []
     for company in companies:
-        logger.info(f"뉴스 검색 중: {company}")
+        logger.info(f"검색 중: {company}")
+
+        # 실시간 주가 (pykrx)
+        price = get_stock_price(company)
+        price_line = f"현재가: {price}" if price else "현재가: 조회 불가"
+
+        # 오늘 뉴스 (Claude web_search)
         news = search_news_for_one_company(company, today)
-        results.append(f"### {company}\n{news}")
+
+        results.append(f"### {company}\n{price_line}\n{news}")
 
     return "\n\n".join(results)
 
