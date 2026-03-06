@@ -409,10 +409,15 @@ async def news_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("접근 권한이 없습니다.")
         return
 
-    # context.args는 같은 줄만 인식 → 줄바꿈 입력도 처리
+    # context.args는 같은 줄만 인식 → 줄바꿈/붙여쓰기 모두 처리
+    # /news 기업1,기업2 또는 /news기업1,기업2 형태 지원
     full_text = update.message.text or ""
-    _match = re.match(r"^/news(?:@\S+)?\s*([\s\S]*)", full_text, re.IGNORECASE)
+    _match = re.match(r"^/news(?:@\S+)?[\s,]*([\s\S]*)", full_text, re.IGNORECASE)
     args_text = _match.group(1).strip() if _match else ""
+    if not args_text:
+        # 붙여쓰기 처리: /news하이브 → 하이브
+        _match2 = re.match(r"^/news(?:@\S+)?(\S[\s\S]*)", full_text, re.IGNORECASE)
+        args_text = _match2.group(1).strip() if _match2 else ""
     if not args_text:
         current = news_scheduler.get_subscription(chat_id)
         if current:
@@ -550,6 +555,15 @@ def main() -> None:
     app.add_handler(CommandHandler("news", news_alert_command))
     app.add_handler(CommandHandler("news_off", news_alert_cancel_command))
     app.add_handler(CommandHandler("news_now", news_now_command))
+    # 붙여쓰기 커맨드 처리: /news하이브, /news_now삼성전자 등
+    app.add_handler(MessageHandler(
+        filters.COMMAND & filters.Regex(r"^/news_now\S"),
+        news_now_command,
+    ))
+    app.add_handler(MessageHandler(
+        filters.COMMAND & filters.Regex(r"^/news[^_\s@]"),
+        news_alert_command,
+    ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
