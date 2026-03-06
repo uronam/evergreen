@@ -15,6 +15,7 @@ import aiofiles
 import tempfile
 import os
 import queue
+import re
 import threading
 
 from telegram import Update, BotCommand
@@ -408,7 +409,10 @@ async def news_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("접근 권한이 없습니다.")
         return
 
-    args_text = " ".join(context.args).strip() if context.args else ""
+    # context.args는 같은 줄만 인식 → 줄바꿈 입력도 처리
+    full_text = update.message.text or ""
+    _match = re.match(r"^/news(?:@\S+)?\s*([\s\S]*)", full_text, re.IGNORECASE)
+    args_text = _match.group(1).strip() if _match else ""
     if not args_text:
         current = news_scheduler.get_subscription(chat_id)
         if current:
@@ -430,8 +434,8 @@ async def news_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
         return
 
-    # 쉼표 또는 공백으로 분리
-    companies = [c.strip() for c in args_text.replace(" ", ",").split(",") if c.strip()]
+    # 쉼표, 줄바꿈, 공백으로 분리
+    companies = [c.strip() for c in re.split(r"[,\n]+", args_text) if c.strip()]
     if not companies:
         await update.message.reply_text("기업명을 입력해주세요.\n예: `/news 삼성전자,SK하이닉스`", parse_mode="Markdown")
         return
