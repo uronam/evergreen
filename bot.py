@@ -465,16 +465,32 @@ async def news_alert_cancel_command(update: Update, context: ContextTypes.DEFAUL
 
 
 async def news_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """지금 바로 뉴스 받기: /news_now"""
+    """지금 바로 뉴스 받기: /news_now [기업1,기업2,...]"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     if not is_allowed(user_id):
         return
 
-    companies = news_scheduler.get_subscription(chat_id)
+    # 인라인 기업명 파싱: /news_now하이브 또는 /news_now 기업1,기업2
+    full_text = update.message.text or ""
+    _match = re.match(r"^/news_now(?:@\S+)?[\s,]*([\s\S]*)", full_text, re.IGNORECASE)
+    inline_text = _match.group(1).strip() if _match else ""
+    # 붙여쓴 경우: /news_now하이브 → full_text에서 /news_now 이후 바로 나오는 부분
+    if not inline_text:
+        _match2 = re.match(r"^/news_now(?:@\S+)?(\S[\s\S]*)", full_text, re.IGNORECASE)
+        inline_text = _match2.group(1).strip() if _match2 else ""
+
+    if inline_text:
+        companies = [c.strip() for c in re.split(r"[,\n]+", inline_text) if c.strip()]
+    else:
+        companies = news_scheduler.get_subscription(chat_id)
+
     if not companies:
         await update.message.reply_text(
-            "등록된 기업이 없습니다.\n먼저 /뉴스알림으로 기업을 등록해주세요."
+            "등록된 기업이 없습니다.\n"
+            "• 구독 설정: `/news 기업1,기업2,...`\n"
+            "• 즉시 검색: `/news_now 기업1,기업2,...`",
+            parse_mode="Markdown"
         )
         return
 
