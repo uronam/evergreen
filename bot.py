@@ -126,7 +126,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/start - 대화 초기화\n"
         "/clear - 대화 히스토리 삭제\n"
         "/help - 도움말\n"
-        "/뉴스알림 - 매일 오전 7시 기업 뉴스 자동 알림\n\n"
+        "/news - 매일 오전 7시 기업 뉴스 자동 알림\n\n"
         "무엇을 도와드릴까요?",
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -153,10 +153,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/clear - 대화 히스토리만 삭제\n"
         "/help - 이 도움말 보기\n\n"
         "**뉴스 자동 알림**\n"
-        "/뉴스알림 기업1,기업2 - 매일 오전 7시 뉴스 알림 설정\n"
-        "/뉴스알림취소 - 뉴스 알림 해제\n"
-        "/뉴스지금 - 지금 바로 뉴스 받기\n"
-        "예: `/뉴스알림 삼성전자,SK하이닉스,현대차`",
+        "/news 기업1,기업2 - 매일 오전 7시 뉴스 알림 설정\n"
+        "/news\\_off - 뉴스 알림 해제\n"
+        "/news\\_now - 지금 바로 뉴스 받기\n"
+        "예: `/news 삼성전자,SK하이닉스,현대차`",
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -401,7 +401,7 @@ async def _read_file_text(path: str, mime_type: str) -> str | None:
 
 
 async def news_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """뉴스 알림 설정: /뉴스알림 기업1,기업2,..."""
+    """뉴스 알림 설정: /news 기업1,기업2,..."""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     if not is_allowed(user_id):
@@ -415,15 +415,16 @@ async def news_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(
                 f"📰 현재 뉴스 알림 설정:\n{', '.join(current)}\n\n"
                 "매일 오전 7시(KST)에 뉴스를 전송합니다.\n\n"
-                "변경: /뉴스알림 기업1,기업2,...\n"
-                "취소: /뉴스알림취소"
+                "변경: /news 기업1,기업2,...\n"
+                "취소: /news\\_off",
+                parse_mode="Markdown"
             )
         else:
             await update.message.reply_text(
                 "📰 **뉴스 자동 알림 설정**\n\n"
                 "매일 오전 7시에 기업 뉴스를 자동으로 받아볼 수 있습니다.\n\n"
                 "**사용법:**\n"
-                "`/뉴스알림 메리츠금융지주,SK하이닉스,현대차`\n\n"
+                "`/news 메리츠금융지주,SK하이닉스,현대차`\n\n"
                 "기업명을 쉼표로 구분해서 입력해주세요.",
                 parse_mode="Markdown"
             )
@@ -432,7 +433,7 @@ async def news_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 쉼표 또는 공백으로 분리
     companies = [c.strip() for c in args_text.replace(" ", ",").split(",") if c.strip()]
     if not companies:
-        await update.message.reply_text("기업명을 입력해주세요.\n예: `/뉴스알림 삼성전자,SK하이닉스`", parse_mode="Markdown")
+        await update.message.reply_text("기업명을 입력해주세요.\n예: `/news 삼성전자,SK하이닉스`", parse_mode="Markdown")
         return
 
     news_scheduler.set_subscription(chat_id, companies)
@@ -441,13 +442,13 @@ async def news_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"**등록 기업:** {', '.join(companies)}\n"
         f"**발송 시간:** 매일 오전 7시 (KST)\n\n"
         f"내일부터 자동으로 뉴스 브리핑을 보내드립니다. 📰\n"
-        f"취소하려면 /뉴스알림취소",
+        f"취소하려면 /news\\_off",
         parse_mode="Markdown"
     )
 
 
 async def news_alert_cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """뉴스 알림 취소: /뉴스알림취소"""
+    """뉴스 알림 취소: /news_off"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     if not is_allowed(user_id):
@@ -460,7 +461,7 @@ async def news_alert_cancel_command(update: Update, context: ContextTypes.DEFAUL
 
 
 async def news_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """지금 바로 뉴스 받기: /뉴스지금"""
+    """지금 바로 뉴스 받기: /news_now"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     if not is_allowed(user_id):
@@ -501,9 +502,9 @@ async def post_init(application: Application) -> None:
         BotCommand("start", "대화 초기화"),
         BotCommand("clear", "대화 히스토리 삭제"),
         BotCommand("help", "도움말"),
-        BotCommand("뉴스알림", "기업 뉴스 자동 알림 설정"),
-        BotCommand("뉴스알림취소", "뉴스 알림 취소"),
-        BotCommand("뉴스지금", "지금 바로 뉴스 받기"),
+        BotCommand("news", "기업 뉴스 자동 알림 설정"),
+        BotCommand("news_off", "뉴스 알림 취소"),
+        BotCommand("news_now", "지금 바로 뉴스 받기"),
     ])
 
     scheduler = news_scheduler.create_scheduler(application.bot)
@@ -526,9 +527,9 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clear", clear_command))
-    app.add_handler(CommandHandler("뉴스알림", news_alert_command))
-    app.add_handler(CommandHandler("뉴스알림취소", news_alert_cancel_command))
-    app.add_handler(CommandHandler("뉴스지금", news_now_command))
+    app.add_handler(CommandHandler("news", news_alert_command))
+    app.add_handler(CommandHandler("news_off", news_alert_cancel_command))
+    app.add_handler(CommandHandler("news_now", news_now_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
