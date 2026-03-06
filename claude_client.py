@@ -5,6 +5,16 @@ from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, MAX_TOKENS, SYSTEM_PROMPT
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
+WEB_SEARCH_TOOL = [{"type": "web_search_20250305", "name": "web_search"}]
+
+
+def _extract_text(content: list) -> str:
+    """응답 content 블록에서 텍스트만 추출합니다."""
+    return "".join(
+        block.text for block in content
+        if hasattr(block, "type") and block.type == "text" and hasattr(block, "text")
+    )
+
 
 def ask_claude(history: list[dict], user_message: str) -> str:
     """텍스트 메세지로 Claude에게 질문합니다."""
@@ -13,9 +23,10 @@ def ask_claude(history: list[dict], user_message: str) -> str:
         model=CLAUDE_MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
+        tools=WEB_SEARCH_TOOL,
         messages=messages,
     )
-    return response.content[0].text
+    return _extract_text(response.content)
 
 
 def ask_claude_with_image(history: list[dict], user_message: str, image_data: bytes, media_type: str) -> str:
@@ -37,9 +48,10 @@ def ask_claude_with_image(history: list[dict], user_message: str, image_data: by
         model=CLAUDE_MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
+        tools=WEB_SEARCH_TOOL,
         messages=messages,
     )
-    return response.content[0].text
+    return _extract_text(response.content)
 
 
 def ask_claude_with_document(history: list[dict], user_message: str, file_text: str, filename: str) -> str:
@@ -67,9 +79,10 @@ def ask_claude_with_pdf(history: list[dict], user_message: str, pdf_data: bytes)
         model=CLAUDE_MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
+        tools=WEB_SEARCH_TOOL,
         messages=messages,
     )
-    return response.content[0].text
+    return _extract_text(response.content)
 
 
 def stream_claude(history: list[dict], user_message: str):
@@ -79,6 +92,7 @@ def stream_claude(history: list[dict], user_message: str):
         model=CLAUDE_MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
+        tools=WEB_SEARCH_TOOL,
         messages=messages,
     ) as stream:
         for text in stream.text_stream:
