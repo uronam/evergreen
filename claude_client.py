@@ -6,6 +6,7 @@ from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, MAX_TOKENS, SYSTEM_PROMPT
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 WEB_SEARCH_TOOL = [{"type": "web_search_20250305", "name": "web_search"}]
+WEB_SEARCH_BETAS = ["web-search-2025-03-05"]
 
 
 def _extract_text(content: list) -> str:
@@ -19,12 +20,13 @@ def _extract_text(content: list) -> str:
 def ask_claude(history: list[dict], user_message: str) -> str:
     """텍스트 메세지로 Claude에게 질문합니다."""
     messages = history + [{"role": "user", "content": user_message}]
-    response = client.messages.create(
+    response = client.beta.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
         tools=WEB_SEARCH_TOOL,
         messages=messages,
+        betas=WEB_SEARCH_BETAS,
     )
     return _extract_text(response.content)
 
@@ -44,12 +46,13 @@ def ask_claude_with_image(history: list[dict], user_message: str, image_data: by
         {"type": "text", "text": user_message or "이 이미지를 분석하고 설명해 주세요."},
     ]
     messages = history + [{"role": "user", "content": content}]
-    response = client.messages.create(
+    response = client.beta.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
         tools=WEB_SEARCH_TOOL,
         messages=messages,
+        betas=WEB_SEARCH_BETAS,
     )
     return _extract_text(response.content)
 
@@ -75,12 +78,13 @@ def ask_claude_with_pdf(history: list[dict], user_message: str, pdf_data: bytes)
         {"type": "text", "text": user_message or "이 PDF 문서를 요약하고 핵심 내용을 정리해 주세요."},
     ]
     messages = history + [{"role": "user", "content": content}]
-    response = client.messages.create(
+    response = client.beta.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
         tools=WEB_SEARCH_TOOL,
         messages=messages,
+        betas=WEB_SEARCH_BETAS,
     )
     return _extract_text(response.content)
 
@@ -88,12 +92,13 @@ def ask_claude_with_pdf(history: list[dict], user_message: str, pdf_data: bytes)
 def stream_claude(history: list[dict], user_message: str):
     """Claude 응답을 스트리밍으로 생성합니다."""
     messages = history + [{"role": "user", "content": user_message}]
-    with client.messages.stream(
+    with client.beta.messages.stream(
         model=CLAUDE_MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
         tools=WEB_SEARCH_TOOL,
         messages=messages,
+        betas=WEB_SEARCH_BETAS,
     ) as stream:
         for text in stream.text_stream:
             yield text
