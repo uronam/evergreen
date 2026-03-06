@@ -66,15 +66,18 @@ def get_subscription(chat_id: int) -> list[str] | None:
 
 def search_news_for_companies(companies: list[str]) -> str:
     """기업 목록에 대한 최근 24시간 뉴스를 검색하고 요약합니다."""
+    from datetime import datetime
+    today = datetime.now(KST).strftime("%Y년 %m월 %d일")
     companies_str = ", ".join(companies)
     prompt = (
-        f"다음 기업들의 최근 24시간 주요 뉴스를 웹 검색으로 찾아서 기업별로 정리해줘:\n"
+        f"오늘은 {today}입니다. "
+        f"web_search 도구를 사용하여 다음 기업들의 {today} 기준 최근 24시간 주요 뉴스를 검색해줘:\n"
         f"{companies_str}\n\n"
         f"각 기업마다:\n"
         f"- 기업명을 제목으로\n"
-        f"- 주요 뉴스 2~3개를 핵심만 간략히\n"
+        f"- 주요 뉴스 2~3개를 핵심만 간략히 (날짜 포함)\n"
         f"- 뉴스가 없으면 '특이사항 없음'으로\n\n"
-        f"오늘 날짜 기준으로 최신 뉴스만 포함해줘."
+        f"반드시 웹 검색으로 {today} 기준 실제 최신 뉴스를 가져와줘. 학습 데이터가 아닌 실시간 검색 결과를 사용해줘."
     )
     try:
         result = claude_client.ask_claude([], prompt)
