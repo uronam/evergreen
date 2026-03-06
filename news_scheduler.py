@@ -64,27 +64,36 @@ def get_subscription(chat_id: int) -> list[str] | None:
     return subscriptions.get(chat_id)
 
 
+def search_news_for_one_company(company: str, today: str) -> str:
+    """단일 기업의 오늘 뉴스를 검색합니다."""
+    prompt = (
+        f"오늘은 {today}입니다.\n"
+        f"web_search 도구로 '{company} 뉴스 {today}' 를 검색해줘.\n\n"
+        f"검색 결과에서 {today} 또는 어제 날짜로 실제 게시된 기사만 골라서:\n"
+        f"- 뉴스 제목과 핵심 내용 1~2줄\n"
+        f"- 기사 날짜 명시\n"
+        f"검색 결과에 {today} 기준 기사가 없으면 '최근 뉴스 없음'으로 표시해줘.\n"
+        f"절대로 학습 데이터나 기억에서 만들어내지 말고, 검색 결과에 있는 기사만 사용해줘."
+    )
+    try:
+        return claude_client.ask_claude([], prompt)
+    except Exception as e:
+        logger.error(f"뉴스 검색 오류 ({company}): {e}")
+        return f"검색 오류: {e}"
+
+
 def search_news_for_companies(companies: list[str]) -> str:
     """기업 목록에 대한 최근 24시간 뉴스를 검색하고 요약합니다."""
     from datetime import datetime
     today = datetime.now(KST).strftime("%Y년 %m월 %d일")
-    companies_str = ", ".join(companies)
-    prompt = (
-        f"오늘은 {today}입니다. "
-        f"web_search 도구를 사용하여 다음 기업들의 {today} 기준 최근 24시간 주요 뉴스를 검색해줘:\n"
-        f"{companies_str}\n\n"
-        f"각 기업마다:\n"
-        f"- 기업명을 제목으로\n"
-        f"- 주요 뉴스 2~3개를 핵심만 간략히 (날짜 포함)\n"
-        f"- 뉴스가 없으면 '특이사항 없음'으로\n\n"
-        f"반드시 웹 검색으로 {today} 기준 실제 최신 뉴스를 가져와줘. 학습 데이터가 아닌 실시간 검색 결과를 사용해줘."
-    )
-    try:
-        result = claude_client.ask_claude([], prompt)
-        return result
-    except Exception as e:
-        logger.error(f"뉴스 검색 오류: {e}")
-        return f"뉴스 검색 중 오류가 발생했습니다: {e}"
+
+    results = []
+    for company in companies:
+        logger.info(f"뉴스 검색 중: {company}")
+        news = search_news_for_one_company(company, today)
+        results.append(f"### {company}\n{news}")
+
+    return "\n\n".join(results)
 
 
 async def send_daily_news(bot) -> None:
