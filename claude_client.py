@@ -92,13 +92,13 @@ def ask_claude_with_pdf(history: list[dict], user_message: str, pdf_data: bytes)
 def stream_claude(history: list[dict], user_message: str):
     """Claude 응답을 스트리밍으로 생성합니다."""
     messages = history + [{"role": "user", "content": user_message}]
-    with client.messages.stream(
+    with client.beta.messages.stream(
         model=CLAUDE_MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
         tools=WEB_SEARCH_TOOL,
         messages=messages,
-        extra_headers={"anthropic-beta": "web-search-2025-03-05"},
+        betas=WEB_SEARCH_BETAS,
     ) as stream:
         for text in stream.text_stream:
             yield text
