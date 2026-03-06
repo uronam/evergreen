@@ -28,6 +28,7 @@ from telegram.ext import (
 from telegram.constants import ChatAction, ParseMode
 
 import claude_client
+import news_scheduler
 from config import (
     TELEGRAM_BOT_TOKEN,
     ALLOWED_USER_IDS,
@@ -124,7 +125,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "**명령어:**\n"
         "/start - 대화 초기화\n"
         "/clear - 대화 히스토리 삭제\n"
-        "/help - 도움말\n\n"
+        "/help - 도움말\n"
+        "/뉴스알림 - 매일 오전 7시 기업 뉴스 자동 알림\n\n"
         "무엇을 도와드릴까요?",
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -149,7 +151,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "**명령어**\n"
         "/start - 대화 초기화 (히스토리 삭제)\n"
         "/clear - 대화 히스토리만 삭제\n"
-        "/help - 이 도움말 보기",
+        "/help - 이 도움말 보기\n\n"
+        "**뉴스 자동 알림**\n"
+        "/뉴스알림 기업1,기업2 - 매일 오전 7시 뉴스 알림 설정\n"
+        "/뉴스알림취소 - 뉴스 알림 해제\n"
+        "/뉴스지금 - 지금 바로 뉴스 받기\n"
+        "예: `/뉴스알림 삼성전자,SK하이닉스,현대차`",
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -393,6 +400,92 @@ async def _read_file_text(path: str, mime_type: str) -> str | None:
     return None
 
 
+async def news_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """뉴스 알림 설정: /뉴스알림 기업1,기업2,..."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("접근 권한이 없습니다.")
+        return
+
+    args_text = " ".join(context.args).strip() if context.args else ""
+    if not args_text:
+        current = news_scheduler.get_subscription(chat_id)
+        if current:
+            await update.message.reply_text(
+                f"📰 현재 뉴스 알림 설정:\n{', '.join(current)}\n\n"
+                "매일 오전 7시(KST)에 뉴스를 전송합니다.\n\n"
+                "변경: /뉴스알림 기업1,기업2,...\n"
+                "취소: /뉴스알림취소"
+            )
+        else:
+            await update.message.reply_text(
+                "📰 **뉴스 자동 알림 설정**\n\n"
+                "매일 오전 7시에 기업 뉴스를 자동으로 받아볼 수 있습니다.\n\n"
+                "**사용법:**\n"
+                "`/뉴스알림 메리츠금융지주,SK하이닉스,현대차`\n\n"
+                "기업명을 쉼표로 구분해서 입력해주세요.",
+                parse_mode="Markdown"
+            )
+        return
+
+    # 쉼표 또는 공백으로 분리
+    companies = [c.strip() for c in args_text.replace(" ", ",").split(",") if c.strip()]
+    if not companies:
+        await update.message.reply_text("기업명을 입력해주세요.\n예: `/뉴스알림 삼성전자,SK하이닉스`", parse_mode="Markdown")
+        return
+
+    news_scheduler.set_subscription(chat_id, companies)
+    await update.message.reply_text(
+        f"✅ 뉴스 알림이 설정되었습니다!\n\n"
+        f"**등록 기업:** {', '.join(companies)}\n"
+        f"**발송 시간:** 매일 오전 7시 (KST)\n\n"
+        f"내일부터 자동으로 뉴스 브리핑을 보내드립니다. 📰\n"
+        f"취소하려면 /뉴스알림취소",
+        parse_mode="Markdown"
+    )
+
+
+async def news_alert_cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """뉴스 알림 취소: /뉴스알림취소"""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if not is_allowed(user_id):
+        return
+
+    if news_scheduler.remove_subscription(chat_id):
+        await update.message.reply_text("🔕 뉴스 알림이 취소되었습니다.")
+    else:
+        await update.message.reply_text("현재 설정된 뉴스 알림이 없습니다.")
+
+
+async def news_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """지금 바로 뉴스 받기: /뉴스지금"""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if not is_allowed(user_id):
+        return
+
+    companies = news_scheduler.get_subscription(chat_id)
+    if not companies:
+        await update.message.reply_text(
+            "등록된 기업이 없습니다.\n먼저 /뉴스알림으로 기업을 등록해주세요."
+        )
+        return
+
+    await update.message.reply_text(f"📰 뉴스 검색 중... ({', '.join(companies)}) ⏳")
+    try:
+        news_text = await asyncio.to_thread(news_scheduler.search_news_for_companies, companies)
+        full_text = "📰 **기업 뉴스 브리핑**\n\n" + news_text
+        for chunk in _split_text(full_text):
+            try:
+                await update.message.reply_text(chunk, parse_mode="Markdown")
+            except Exception:
+                await update.message.reply_text(chunk)
+    except Exception as e:
+        await update.message.reply_text(f"뉴스 검색 중 오류가 발생했습니다: {e}")
+
+
 async def handle_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update.effective_user.id):
         return
@@ -403,12 +496,20 @@ async def handle_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def post_init(application: Application) -> None:
-    """봇 시작 시 명령어 목록 등록"""
+    """봇 시작 시 명령어 목록 등록 및 스케줄러 시작"""
     await application.bot.set_my_commands([
         BotCommand("start", "대화 초기화"),
         BotCommand("clear", "대화 히스토리 삭제"),
         BotCommand("help", "도움말"),
+        BotCommand("뉴스알림", "기업 뉴스 자동 알림 설정"),
+        BotCommand("뉴스알림취소", "뉴스 알림 취소"),
+        BotCommand("뉴스지금", "지금 바로 뉴스 받기"),
     ])
+
+    scheduler = news_scheduler.create_scheduler(application.bot)
+    scheduler.start()
+    application.bot_data["scheduler"] = scheduler
+    logger.info("뉴스 스케줄러 시작됨")
 
 
 def main() -> None:
@@ -425,6 +526,9 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clear", clear_command))
+    app.add_handler(CommandHandler("뉴스알림", news_alert_command))
+    app.add_handler(CommandHandler("뉴스알림취소", news_alert_cancel_command))
+    app.add_handler(CommandHandler("뉴스지금", news_now_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
