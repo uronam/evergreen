@@ -9,7 +9,12 @@ import json
 import logging
 import os
 import asyncio
+import urllib.parse
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
 
+import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
@@ -21,38 +26,41 @@ _ticker_cache: dict[str, str] = {}
 
 
 def get_stock_price(company: str) -> str | None:
-    """pykrx로 오늘 주가(현재가·등락률)를 조회합니다."""
+    """pykrx로 최근 영업일 주가(종가·등락률)를 조회합니다."""
     try:
         from pykrx import stock as krx
-        from datetime import datetime
 
-        today_str = datetime.now(KST).strftime("%Y%m%d")
+        now = datetime.now(KST)
+        # 최근 10일 범위로 조회해 주말/공휴일 문제 해결
+        from_str = (now - timedelta(days=10)).strftime("%Y%m%d")
+        to_str = now.strftime("%Y%m%d")
+        # 종목코드 조회에 사용할 기준일 (종목 목록은 최근 영업일 기준)
+        ref_str = to_str
 
         # 종목코드 조회 (캐시 활용)
         if company not in _ticker_cache:
-            for market in ("ALL",):
-                tickers = krx.get_market_ticker_list(today_str, market=market)
-                for t in tickers:
-                    name = krx.get_market_ticker_name(t)
-                    if name == company:
-                        _ticker_cache[company] = t
-                        break
-                if company in _ticker_cache:
+            tickers = krx.get_market_ticker_list(ref_str, market="ALL")
+            for t in tickers:
+                name = krx.get_market_ticker_name(t)
+                if name == company:
+                    _ticker_cache[company] = t
                     break
 
         ticker = _ticker_cache.get(company)
         if not ticker:
             return None
 
-        df = krx.get_market_ohlcv(today_str, today_str, ticker)
+        df = krx.get_market_ohlcv(from_str, to_str, ticker)
         if df.empty:
             return None
 
         row = df.iloc[-1]
+        date_str = df.index[-1].strftime("%m/%d") if hasattr(df.index[-1], "strftime") else ""
         close = int(row.get("종가", row.iloc[3]))
         change_pct = float(row.get("등락률", 0))
         sign = "+" if change_pct >= 0 else ""
-        return f"{close:,}원 ({sign}{change_pct:.2f}%)"
+        date_note = f" ({date_str} 기준)" if date_str else ""
+        return f"{close:,}원 ({sign}{change_pct:.2f}%){date_note}"
     except Exception as e:
         logger.warning(f"주가 조회 실패 ({company}): {e}")
         return None
@@ -105,38 +113,76 @@ def get_subscription(chat_id: int) -> list[str] | None:
     return subscriptions.get(chat_id)
 
 
-def search_news_for_one_company(company: str, today: str) -> str:
-    """단일 기업의 오늘 뉴스를 검색합니다."""
-    prompt = (
-        f"오늘은 {today}입니다.\n"
-        f"web_search 도구로 '{company} 뉴스 {today}' 를 검색해줘.\n\n"
-        f"검색 결과에서 {today} 또는 어제 날짜로 실제 게시된 기사만 골라서:\n"
-        f"- 뉴스 제목과 핵심 내용 1~2줄\n"
-        f"- 기사 날짜 명시\n"
-        f"검색 결과에 {today} 기준 기사가 없으면 '최근 뉴스 없음'으로 표시해줘.\n"
-        f"절대로 학습 데이터나 기억에서 만들어내지 말고, 검색 결과에 있는 기사만 사용해줘."
-    )
+def _fetch_google_news_rss(company: str, max_items: int = 5) -> list[dict]:
+    """구글 뉴스 RSS에서 기업 관련 최신 기사를 파싱합니다."""
+    query = urllib.parse.quote(company)
+    url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/1.0)"}
     try:
-        return claude_client.ask_claude([], prompt)
+        resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+        resp.raise_for_status()
     except Exception as e:
-        logger.error(f"뉴스 검색 오류 ({company}): {e}")
-        return f"검색 오류: {e}"
+        logger.warning(f"구글 뉴스 RSS 요청 실패 ({company}): {e}")
+        return []
+
+    articles = []
+    try:
+        root = ET.fromstring(resp.text)
+        channel = root.find("channel")
+        if channel is None:
+            return []
+        cutoff = datetime.now(pytz.utc) - timedelta(days=2)
+        for item in channel.findall("item")[:max_items * 3]:
+            title = item.findtext("title", "").strip()
+            link = item.findtext("link", "").strip()
+            pub_date_str = item.findtext("pubDate", "")
+            source = item.findtext("source", "")
+            try:
+                pub_dt = parsedate_to_datetime(pub_date_str)
+                if pub_dt < cutoff:
+                    continue
+                date_label = pub_dt.astimezone(KST).strftime("%m/%d %H:%M")
+            except Exception:
+                date_label = pub_date_str[:16] if pub_date_str else ""
+
+            # 구글 뉴스 타이틀은 "기사제목 - 언론사" 형태
+            if " - " in title:
+                headline, media = title.rsplit(" - ", 1)
+            else:
+                headline, media = title, source
+
+            articles.append({"title": headline.strip(), "media": media.strip(), "date": date_label, "link": link})
+            if len(articles) >= max_items:
+                break
+    except ET.ParseError as e:
+        logger.warning(f"RSS XML 파싱 오류 ({company}): {e}")
+
+    return articles
+
+
+def search_news_for_one_company(company: str, today: str) -> str:
+    """단일 기업의 최신 뉴스를 구글 뉴스 RSS로 검색합니다."""
+    articles = _fetch_google_news_rss(company)
+    if not articles:
+        return "최근 뉴스 없음 (검색 결과 없음)"
+
+    lines = []
+    for a in articles:
+        lines.append(f"• [{a['date']}] {a['title']} ({a['media']})")
+    return "\n".join(lines)
 
 
 def search_news_for_companies(companies: list[str]) -> str:
-    """기업 목록에 대한 최근 24시간 뉴스 + 실시간 주가를 반환합니다."""
-    from datetime import datetime
+    """기업 목록에 대한 최근 뉴스 + 주가를 반환합니다."""
     today = datetime.now(KST).strftime("%Y년 %m월 %d일")
 
     results = []
     for company in companies:
         logger.info(f"검색 중: {company}")
 
-        # 실시간 주가 (pykrx)
         price = get_stock_price(company)
-        price_line = f"현재가: {price}" if price else "현재가: 조회 불가"
+        price_line = f"주가: {price}" if price else "주가: 조회 불가"
 
-        # 오늘 뉴스 (Claude web_search)
         news = search_news_for_one_company(company, today)
 
         results.append(f"### {company}\n{price_line}\n{news}")
