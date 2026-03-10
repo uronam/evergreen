@@ -40,6 +40,7 @@ def _search_naver_ticker(company: str) -> str | None:
     try:
         resp = httpx.get(url, params=params, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
         data = resp.json()
+        logger.info(f"Naver 종목코드 검색 응답 ({company}): {str(data)[:200]}")
         items = data.get("items", [[]])
         if items and items[0]:
             return items[0][0][1]  # 첫 번째 결과의 종목코드
@@ -48,31 +49,49 @@ def _search_naver_ticker(company: str) -> str | None:
     return None
 
 
+def _search_pykrx_ticker(company: str) -> str | None:
+    """pykrx로 종목코드를 찾습니다 (fallback)."""
+    try:
+        from pykrx import stock as krx
+        today = datetime.now(KST).strftime("%Y%m%d")
+        tickers = krx.get_market_ticker_list(today, market="ALL")
+        for t in tickers:
+            if krx.get_market_ticker_name(t) == company:
+                return t
+    except Exception as e:
+        logger.warning(f"pykrx 종목코드 검색 실패 ({company}): {e}")
+    return None
+
+
 def get_stock_price(company: str) -> str | None:
-    """Naver Finance에서 실시간 주가를 조회합니다."""
+    """종목코드를 조회한 후 yfinance로 주가를 가져옵니다."""
     try:
         if company not in _ticker_cache:
-            ticker = _search_naver_ticker(company)
+            ticker = _search_naver_ticker(company) or _search_pykrx_ticker(company)
             if ticker:
                 _ticker_cache[company] = ticker
+                logger.info(f"종목코드 캐시 저장 ({company}): {ticker}")
 
         ticker = _ticker_cache.get(company)
         if not ticker:
+            logger.warning(f"종목코드를 찾을 수 없음: {company}")
             return None
 
-        url = f"https://m.stock.naver.com/api/stock/{ticker}/basic"
-        resp = httpx.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
-        resp.raise_for_status()
-        data = resp.json()
-
-        close = data.get("closePrice", "")
-        change_pct = data.get("fluctuationsRatio", "")
-        if close:
+        import yfinance as yf
+        for suffix in [".KS", ".KQ"]:
             try:
-                sign = "+" if float(str(change_pct).replace(",", "")) >= 0 else ""
-            except Exception:
-                sign = ""
-            return f"{close}원 ({sign}{change_pct}%)"
+                stock = yf.Ticker(f"{ticker}{suffix}")
+                info = stock.fast_info
+                price = getattr(info, "last_price", None)
+                if price:
+                    prev = getattr(info, "previous_close", None)
+                    if prev and prev > 0:
+                        change_pct = (price - prev) / prev * 100
+                        sign = "+" if change_pct >= 0 else ""
+                        return f"{int(price):,}원 ({sign}{change_pct:.2f}%)"
+                    return f"{int(price):,}원"
+            except Exception as e:
+                logger.warning(f"yfinance 조회 실패 ({company}{suffix}): {e}")
     except Exception as e:
         logger.warning(f"주가 조회 실패 ({company}): {e}")
     return None
