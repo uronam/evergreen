@@ -25,45 +25,57 @@ import claude_client
 _ticker_cache: dict[str, str] = {}
 
 
-def get_stock_price(company: str) -> str | None:
-    """pykrx로 최근 영업일 주가(종가·등락률)를 조회합니다."""
+def _search_naver_ticker(company: str) -> str | None:
+    """Naver Finance 자동완성 API로 종목코드를 찾습니다."""
+    url = "https://ac.finance.naver.com/ac"
+    params = {
+        "q": company,
+        "q_enc": "UTF-8",
+        "st": "111",
+        "r_format": "json",
+        "r_enc": "UTF-8",
+        "r_lang": "ko",
+        "limit": "5",
+    }
     try:
-        from pykrx import stock as krx
+        resp = httpx.get(url, params=params, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+        data = resp.json()
+        items = data.get("items", [[]])
+        if items and items[0]:
+            return items[0][0][1]  # 첫 번째 결과의 종목코드
+    except Exception as e:
+        logger.warning(f"Naver 종목코드 검색 실패 ({company}): {e}")
+    return None
 
-        now = datetime.now(KST)
-        # 최근 10일 범위로 조회해 주말/공휴일 문제 해결
-        from_str = (now - timedelta(days=10)).strftime("%Y%m%d")
-        to_str = now.strftime("%Y%m%d")
-        # 종목코드 조회에 사용할 기준일 (종목 목록은 최근 영업일 기준)
-        ref_str = to_str
 
-        # 종목코드 조회 (캐시 활용)
+def get_stock_price(company: str) -> str | None:
+    """Naver Finance에서 실시간 주가를 조회합니다."""
+    try:
         if company not in _ticker_cache:
-            tickers = krx.get_market_ticker_list(ref_str, market="ALL")
-            for t in tickers:
-                name = krx.get_market_ticker_name(t)
-                if name == company:
-                    _ticker_cache[company] = t
-                    break
+            ticker = _search_naver_ticker(company)
+            if ticker:
+                _ticker_cache[company] = ticker
 
         ticker = _ticker_cache.get(company)
         if not ticker:
             return None
 
-        df = krx.get_market_ohlcv(from_str, to_str, ticker)
-        if df.empty:
-            return None
+        url = f"https://m.stock.naver.com/api/stock/{ticker}/basic"
+        resp = httpx.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        data = resp.json()
 
-        row = df.iloc[-1]
-        date_str = df.index[-1].strftime("%m/%d") if hasattr(df.index[-1], "strftime") else ""
-        close = int(row.get("종가", row.iloc[3]))
-        change_pct = float(row.get("등락률", 0))
-        sign = "+" if change_pct >= 0 else ""
-        date_note = f" ({date_str} 기준)" if date_str else ""
-        return f"{close:,}원 ({sign}{change_pct:.2f}%){date_note}"
+        close = data.get("closePrice", "")
+        change_pct = data.get("fluctuationsRatio", "")
+        if close:
+            try:
+                sign = "+" if float(str(change_pct).replace(",", "")) >= 0 else ""
+            except Exception:
+                sign = ""
+            return f"{close}원 ({sign}{change_pct}%)"
     except Exception as e:
         logger.warning(f"주가 조회 실패 ({company}): {e}")
-        return None
+    return None
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +180,11 @@ def search_news_for_one_company(company: str, today: str) -> str:
 
     lines = []
     for a in articles:
-        lines.append(f"• [{a['date']}] {a['title']} ({a['media']})")
+        link = a.get("link", "")
+        if link:
+            lines.append(f"• [{a['date']}] [{a['title']}]({link}) ({a['media']})")
+        else:
+            lines.append(f"• [{a['date']}] {a['title']} ({a['media']})")
     return "\n".join(lines)
 
 
