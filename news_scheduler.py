@@ -25,55 +25,47 @@ import claude_client
 _ticker_cache: dict[str, str] = {}
 
 
-def _search_yahoo_symbol(company: str) -> str | None:
-    """Yahoo Finance 검색 API로 한국 주식 심볼을 찾습니다."""
-    url = "https://query2.finance.yahoo.com/v1/finance/search"
-    params = {
-        "q": company,
-        "lang": "ko-KR",
-        "region": "KR",
-        "quotesCount": "5",
-        "newsCount": "0",
-    }
-    try:
-        resp = httpx.get(url, params=params, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
-        data = resp.json()
-        for q in data.get("quotes", []):
-            if q.get("exchange") in ("KSC", "KOE"):  # KOSPI / KOSDAQ
-                symbol = q.get("symbol", "")
-                if symbol:
-                    logger.info(f"Yahoo 심볼 발견 ({company}): {symbol}")
-                    return symbol
-        logger.warning(f"Yahoo 심볼 미발견 ({company}): {str(data.get('quotes', []))[:200]}")
-    except Exception as e:
-        logger.warning(f"Yahoo 심볼 검색 실패 ({company}): {e}")
-    return None
+# KRX 전체 종목 목록 캐시 (최초 1회 로드)
+_krx_listing = None
+
+
+def _get_krx_listing():
+    global _krx_listing
+    if _krx_listing is None:
+        import FinanceDataReader as fdr
+        _krx_listing = fdr.StockListing("KRX")[["Name", "Code"]]
+        logger.info(f"KRX 종목 목록 로드 완료: {len(_krx_listing)}개")
+    return _krx_listing
 
 
 def get_stock_price(company: str) -> str | None:
-    """Yahoo Finance로 한국 주식 실시간 주가를 조회합니다."""
+    """FinanceDataReader로 KRX 한국 주식 주가를 조회합니다."""
     try:
         if company not in _ticker_cache:
-            symbol = _search_yahoo_symbol(company)
-            if symbol:
-                _ticker_cache[company] = symbol
+            listing = _get_krx_listing()
+            row = listing[listing["Name"] == company]
+            if row.empty:
+                logger.warning(f"KRX 종목 미발견: {company}")
+                return None
+            _ticker_cache[company] = row["Code"].iloc[0]
+            logger.info(f"종목코드 발견 ({company}): {_ticker_cache[company]}")
 
-        symbol = _ticker_cache.get(company)
-        if not symbol:
+        code = _ticker_cache.get(company)
+        if not code:
             return None
 
-        import yfinance as yf
-        stock = yf.Ticker(symbol)
-        hist = stock.history(period="5d")
-        logger.info(f"yfinance ({symbol}): {len(hist)}행")
-        if not hist.empty:
-            price = hist["Close"].iloc[-1]
-            if len(hist) >= 2:
-                prev = hist["Close"].iloc[-2]
+        import FinanceDataReader as fdr
+        from_date = (datetime.now(KST) - timedelta(days=10)).strftime("%Y-%m-%d")
+        df = fdr.DataReader(code, from_date)
+        logger.info(f"FDR ({company}/{code}): {len(df)}행")
+        if not df.empty:
+            price = int(df["Close"].iloc[-1])
+            if len(df) >= 2:
+                prev = df["Close"].iloc[-2]
                 change_pct = (price - prev) / prev * 100
                 sign = "+" if change_pct >= 0 else ""
-                return f"{int(price):,}원 ({sign}{change_pct:.2f}%)"
-            return f"{int(price):,}원"
+                return f"{price:,}원 ({sign}{change_pct:.2f}%)"
+            return f"{price:,}원"
     except Exception as e:
         logger.warning(f"주가 조회 실패 ({company}): {e}")
     return None

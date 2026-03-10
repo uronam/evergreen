@@ -7,5 +7,4 @@ python-docx==1.1.2
 httpx<0.28.0
 APScheduler>=3.10.0
 pytz>=2024.1
-pykrx>=1.0.45
-yfinance>=0.2.40
+finance-datareader>=0.9.50
