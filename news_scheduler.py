@@ -21,47 +21,46 @@ import pytz
 
 import claude_client
 
-# 종목코드 캐시 (기업명 → 코드)
-_ticker_cache: dict[str, str] = {}
-
-
-# KRX 전체 종목 목록 캐시 (최초 1회 로드)
-_krx_listing = None
-
-
-def _get_krx_listing():
-    global _krx_listing
-    if _krx_listing is None:
-        import FinanceDataReader as fdr
-        _krx_listing = fdr.StockListing("KRX")[["Name", "Code"]]
-        logger.info(f"KRX 종목 목록 로드 완료: {len(_krx_listing)}개")
-    return _krx_listing
+# 한국 주요 종목 Yahoo Finance 심볼 매핑
+_KR_TICKERS: dict[str, str] = {
+    "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "LG에너지솔루션": "373220.KS",
+    "삼성바이오로직스": "207940.KS", "현대차": "005380.KS", "기아": "000270.KS",
+    "셀트리온": "068270.KS", "POSCO홀딩스": "005490.KS", "삼성SDI": "006400.KS",
+    "LG화학": "051910.KS", "카카오": "035720.KS", "NAVER": "035420.KS",
+    "네이버": "035420.KS", "현대모비스": "012330.KS", "KB금융": "105560.KS",
+    "신한지주": "055550.KS", "하나금융지주": "086790.KS", "우리금융지주": "316140.KS",
+    "메리츠금융지주": "138040.KS", "삼성생명": "032830.KS", "한국전력": "015760.KS",
+    "SK텔레콤": "017670.KS", "KT": "030200.KS", "LG전자": "066570.KS",
+    "SK이노베이션": "096770.KS", "두산에너빌리티": "034020.KS",
+    "한화에어로스페이스": "012450.KS", "한국항공우주": "047810.KS", "KAI": "047810.KS",
+    "삼성물산": "028260.KS", "현대건설": "000720.KS", "LG": "003550.KS",
+    "SK": "034730.KS", "삼성전기": "009150.KS", "HD현대중공업": "329180.KS",
+    "한국조선해양": "009540.KS", "HMM": "011200.KS", "대한항공": "003490.KS",
+    "이마트": "139480.KS", "CJ제일제당": "097950.KS", "하이브": "352820.KS",
+    "크래프톤": "259960.KS", "에코프로비엠": "247540.KQ", "에코프로": "086520.KQ",
+    "포스코퓨처엠": "003670.KS", "엘앤에프": "066970.KQ", "카카오뱅크": "323410.KS",
+    "카카오페이": "377300.KS", "토스뱅크": "289080.KQ", "현대제철": "004020.KS",
+    "롯데케미칼": "011170.KS", "SK바이오팜": "326030.KS", "삼성증권": "016360.KS",
+    "미래에셋증권": "006800.KS", "한국금융지주": "071050.KS", "NH투자증권": "005940.KS",
+    "기업은행": "024110.KS", "BNK금융지주": "138930.KS", "DGB금융지주": "139130.KS",
+    "JB금융지주": "175330.KS", "DB손해보험": "005830.KS", "삼성화재": "000810.KS",
+    "현대해상": "001450.KS", "한화손해보험": "000370.KS",
+}
 
 
 def get_stock_price(company: str) -> str | None:
-    """FinanceDataReader로 KRX 한국 주식 주가를 조회합니다."""
+    """yfinance로 한국 주식 주가를 조회합니다."""
+    symbol = _KR_TICKERS.get(company)
+    if not symbol:
+        logger.info(f"종목 매핑 없음: {company}")
+        return None
     try:
-        if company not in _ticker_cache:
-            listing = _get_krx_listing()
-            row = listing[listing["Name"] == company]
-            if row.empty:
-                logger.warning(f"KRX 종목 미발견: {company}")
-                return None
-            _ticker_cache[company] = row["Code"].iloc[0]
-            logger.info(f"종목코드 발견 ({company}): {_ticker_cache[company]}")
-
-        code = _ticker_cache.get(company)
-        if not code:
-            return None
-
-        import FinanceDataReader as fdr
-        from_date = (datetime.now(KST) - timedelta(days=10)).strftime("%Y-%m-%d")
-        df = fdr.DataReader(code, from_date)
-        logger.info(f"FDR ({company}/{code}): {len(df)}행")
-        if not df.empty:
-            price = int(df["Close"].iloc[-1])
-            if len(df) >= 2:
-                prev = df["Close"].iloc[-2]
+        import yfinance as yf
+        hist = yf.Ticker(symbol).history(period="5d")
+        if not hist.empty:
+            price = int(hist["Close"].iloc[-1])
+            if len(hist) >= 2:
+                prev = hist["Close"].iloc[-2]
                 change_pct = (price - prev) / prev * 100
                 sign = "+" if change_pct >= 0 else ""
                 return f"{price:,}원 ({sign}{change_pct:.2f}%)"
