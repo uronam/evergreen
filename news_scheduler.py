@@ -25,60 +25,55 @@ import claude_client
 _ticker_cache: dict[str, str] = {}
 
 
-def _search_naver_ticker(company: str) -> str | None:
-    """Naver Finance 자동완성 API로 종목코드를 찾습니다."""
-    url = "https://ac.finance.naver.com/ac"
+def _search_yahoo_symbol(company: str) -> str | None:
+    """Yahoo Finance 검색 API로 한국 주식 심볼을 찾습니다."""
+    url = "https://query2.finance.yahoo.com/v1/finance/search"
     params = {
         "q": company,
-        "q_enc": "UTF-8",
-        "st": "111",
-        "r_format": "json",
-        "r_enc": "UTF-8",
-        "r_lang": "ko",
-        "limit": "5",
+        "lang": "ko-KR",
+        "region": "KR",
+        "quotesCount": "5",
+        "newsCount": "0",
     }
     try:
         resp = httpx.get(url, params=params, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
         data = resp.json()
-        logger.info(f"Naver 종목코드 검색 응답 ({company}): {str(data)[:200]}")
-        items = data.get("items", [[]])
-        if items and items[0]:
-            return items[0][0][1]  # 첫 번째 결과의 종목코드
+        for q in data.get("quotes", []):
+            if q.get("exchange") in ("KSC", "KOE"):  # KOSPI / KOSDAQ
+                symbol = q.get("symbol", "")
+                if symbol:
+                    logger.info(f"Yahoo 심볼 발견 ({company}): {symbol}")
+                    return symbol
+        logger.warning(f"Yahoo 심볼 미발견 ({company}): {str(data.get('quotes', []))[:200]}")
     except Exception as e:
-        logger.warning(f"Naver 종목코드 검색 실패 ({company}): {e}")
+        logger.warning(f"Yahoo 심볼 검색 실패 ({company}): {e}")
     return None
 
 
 def get_stock_price(company: str) -> str | None:
-    """Naver Finance로 종목코드 조회 후 yfinance로 주가를 가져옵니다."""
+    """Yahoo Finance로 한국 주식 실시간 주가를 조회합니다."""
     try:
         if company not in _ticker_cache:
-            ticker = _search_naver_ticker(company)
-            if ticker:
-                _ticker_cache[company] = ticker
-                logger.info(f"종목코드 캐시 저장 ({company}): {ticker}")
+            symbol = _search_yahoo_symbol(company)
+            if symbol:
+                _ticker_cache[company] = symbol
 
-        ticker = _ticker_cache.get(company)
-        if not ticker:
-            logger.warning(f"종목코드 미발견: {company}")
+        symbol = _ticker_cache.get(company)
+        if not symbol:
             return None
 
         import yfinance as yf
-        for suffix in [".KS", ".KQ"]:
-            try:
-                stock = yf.Ticker(f"{ticker}{suffix}")
-                hist = stock.history(period="5d")
-                logger.info(f"yfinance ({ticker}{suffix}): {len(hist)}행")
-                if not hist.empty:
-                    price = hist["Close"].iloc[-1]
-                    if len(hist) >= 2:
-                        prev = hist["Close"].iloc[-2]
-                        change_pct = (price - prev) / prev * 100
-                        sign = "+" if change_pct >= 0 else ""
-                        return f"{int(price):,}원 ({sign}{change_pct:.2f}%)"
-                    return f"{int(price):,}원"
-            except Exception as e:
-                logger.warning(f"yfinance 조회 실패 ({ticker}{suffix}): {e}")
+        stock = yf.Ticker(symbol)
+        hist = stock.history(period="5d")
+        logger.info(f"yfinance ({symbol}): {len(hist)}행")
+        if not hist.empty:
+            price = hist["Close"].iloc[-1]
+            if len(hist) >= 2:
+                prev = hist["Close"].iloc[-2]
+                change_pct = (price - prev) / prev * 100
+                sign = "+" if change_pct >= 0 else ""
+                return f"{int(price):,}원 ({sign}{change_pct:.2f}%)"
+            return f"{int(price):,}원"
     except Exception as e:
         logger.warning(f"주가 조회 실패 ({company}): {e}")
     return None
